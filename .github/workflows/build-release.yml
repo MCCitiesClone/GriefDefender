@@ -1,0 +1,81 @@
+name: Build & Release
+
+# Builds the plugin jar and publishes a GitHub Release on every push to the
+# default branch. The patch version is bumped automatically, so no manual
+# tagging or version editing is required.
+
+on:
+  push:
+    branches:
+      - master
+      - main
+
+# Allow the workflow to commit the version bump, push a tag and create a release.
+permissions:
+  contents: write
+
+# Never run two releases at once; they would race on the version bump.
+concurrency:
+  group: build-release
+  cancel-in-progress: false
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    # Skip runs triggered by our own version-bump commit to avoid an infinite loop.
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+
+      - name: Bump patch version
+        id: version
+        run: |
+          set -euo pipefail
+          current=$(grep -E '^version=' gradle.properties | head -n1 | cut -d= -f2)
+          echo "Current version: $current"
+          IFS='.' read -r major minor patch <<< "$current"
+          patch=$((patch + 1))
+          new="${major}.${minor}.${patch}"
+          echo "New version: $new"
+          sed -i -E "s/^version=.*/version=${new}/" gradle.properties
+          echo "version=${new}" >> "$GITHUB_OUTPUT"
+
+      - name: Build jar
+        run: |
+          chmod +x gradlew
+          ./gradlew :bukkit:shadowJar --no-daemon --stacktrace
+
+      - name: Commit version bump
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add gradle.properties
+          git commit -m "Bump version to ${{ steps.version.outputs.version }} [skip ci]"
+          git push origin HEAD:${{ github.ref_name }}
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="v${{ steps.version.outputs.version }}"
+          git tag "$tag"
+          git push origin "$tag"
+          gh release create "$tag" \
+            --title "$tag" \
+            --generate-notes \
+            --target "$(git rev-parse HEAD)" \
+            bukkit/build/libs/*.jar
