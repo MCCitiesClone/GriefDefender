@@ -54,6 +54,11 @@ jobs:
 
       - name: Build jar
         run: |
+          # Only the Bukkit jar is released. Drop the Sponge module for this
+          # build: its buildscript pulls org.spongepowered:plugin-meta from a
+          # dead http repo and fails Gradle's configuration phase. This edit is
+          # local to the runner and is never committed.
+          sed -i '/include "sponge"/d' settings.gradle
           chmod +x gradlew
           ./gradlew :bukkit:shadowJar --no-daemon --stacktrace
 
